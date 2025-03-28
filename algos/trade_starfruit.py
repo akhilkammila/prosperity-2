@@ -109,23 +109,7 @@ logger = Logger()
 
 class StarfruitTrader:
     def __init__(self):
-        # Initialize with empty values
-        self.last_valid_best_bid = None
-        self.last_valid_best_ask = None
-        
-    def parse_trader_data(self, trader_data: str) -> dict:
-        """Parse the trader data string into a dictionary"""
-        if not trader_data:
-            return {"best_bid": None, "best_ask": None}
-        
-        try:
-            return json.loads(trader_data)
-        except json.JSONDecodeError:
-            return {"best_bid": None, "best_ask": None}
-    
-    def serialize_trader_data(self, data: dict) -> str:
-        """Serialize the trader data dictionary to a string"""
-        return json.dumps(data)
+        pass
     
     def find_best_prices_with_volume(self, order_depth: OrderDepth, min_volume: int = 15):
         """Find best bid and ask prices with minimum volume"""
@@ -152,9 +136,9 @@ class StarfruitTrader:
         """
         Trading strategy for STARFRUIT:
         - Calculate mid price based on best bid/ask with volume > 15
-        - Look at the orderbook to find favorable prices
-        - Trade at those specific prices with corresponding volumes
-        - Try to clear position at mid price if possible
+        - PART 1: Trade at favorable prices in the orderbook (threshold = 1)
+        - PART 2: Try to clear position at mid price if possible
+        - PART 3: Place resting orders at mid price ± 2
         """
         result = {}
         
@@ -166,19 +150,10 @@ class StarfruitTrader:
         position = state.position.get("STARFRUIT", 0)
         order_depth = state.order_depths["STARFRUIT"]
         
-        # Parse trader data to get previous best prices
-        trader_data = self.parse_trader_data(state.traderData)
-        self.last_valid_best_bid = trader_data.get("best_bid")
-        self.last_valid_best_ask = trader_data.get("best_ask")
-        
         # Find best bid and ask with volume > 15
         best_bid, best_ask = self.find_best_prices_with_volume(order_depth)
-        
-        # Update last valid prices if we found valid ones
-        if best_bid is not None:
-            self.last_valid_best_bid = best_bid
-        if best_ask is not None:
-            self.last_valid_best_ask = best_ask
+        if best_bid is None: best_bid = best_ask - 7
+        if best_ask is None: best_ask = best_bid + 7
             
         # Create orders list
         orders: list[Order] = []
@@ -186,92 +161,74 @@ class StarfruitTrader:
         # Position limit
         position_limit = 20
         
-        # Only proceed if we have both a valid bid and ask
-        if self.last_valid_best_bid is not None and self.last_valid_best_ask is not None:
-            # Calculate mid price
-            mid_price = (self.last_valid_best_bid + self.last_valid_best_ask) / 2
-            mid_price_int = int(mid_price + 0.5)  # Round to nearest integer
-            
-            # Keep track of position for limit checking
-            current_position = position
-            
-            # PART 1: MAIN TRADING STRATEGY
-            # Process sell orders - if price < mid-1, we want to buy
-            if len(order_depth.sell_orders) > 0:
-                # Sort sell orders by price in ascending order (best prices first)
-                for price, volume in sorted(order_depth.sell_orders.items()):
-                    # If price is below our threshold (mid - 1), we want to buy
-                    if price <= (mid_price - 1):
-                        # Check position limit for buying
-                        buy_limit = position_limit - current_position
+        # Calculate mid price
+        mid_price = (best_bid + best_ask) / 2
+        
+        # Keep track of position for limit checking
+        current_position = position
+        
+        # PART 1: MAIN TRADING STRATEGY
+        threshold = 1
+        # Process sell orders - if price < mid-1, we want to buy
+        if len(order_depth.sell_orders) > 0:
+            # Sort sell orders by price in ascending order (best prices first)
+            for price, volume in sorted(order_depth.sell_orders.items()):
+                # If price is below our threshold (mid - 1), we want to buy
+                if price <= (mid_price - threshold):
+                    # Check position limit for buying
+                    buy_limit = position_limit - current_position
+                    
+                    if buy_limit > 0:  # Only if we can buy
+                        # Buy either the available volume or our limit, whichever is smaller
+                        # Note: volume is negative in sell_orders, so we negate it
+                        buy_volume = min(-volume, buy_limit)
                         
-                        if buy_limit > 0:  # Only if we can buy
-                            # Buy either the available volume or our limit, whichever is smaller
-                            # Note: volume is negative in sell_orders, so we negate it
-                            buy_volume = min(-volume, buy_limit)
-                            
-                            if buy_volume > 0:
-                                orders.append(Order("STARFRUIT", price, buy_volume))
-                                current_position += buy_volume  # Update position tracker
-            
-            # Process buy orders - if price > mid+1, we want to sell
-            if len(order_depth.buy_orders) > 0:
-                # Sort buy orders by price in descending order (best prices first)
-                for price, volume in sorted(order_depth.buy_orders.items(), reverse=True):
-                    # If price is above our threshold (mid + 1), we want to sell
-                    if price >= (mid_price + 1):
-                        # Check position limit for selling
-                        sell_limit = position_limit + current_position
+                        if buy_volume > 0:
+                            orders.append(Order("STARFRUIT", price, buy_volume))
+                            current_position += buy_volume  # Update position tracker
+        
+        # Process buy orders - if price > mid+1, we want to sell
+        if len(order_depth.buy_orders) > 0:
+            # Sort buy orders by price in descending order (best prices first)
+            for price, volume in sorted(order_depth.buy_orders.items(), reverse=True):
+                # If price is above our threshold (mid + 1), we want to sell
+                if price >= (mid_price + threshold):
+                    # Check position limit for selling
+                    sell_limit = position_limit + current_position
+                    
+                    if sell_limit > 0:  # Only if we can sell
+                        # Sell either the available volume or our limit, whichever is smaller
+                        sell_volume = min(volume, sell_limit)
                         
-                        if sell_limit > 0:  # Only if we can sell
-                            # Sell either the available volume or our limit, whichever is smaller
-                            sell_volume = min(volume, sell_limit)
-                            
-                            if sell_volume > 0:
-                                orders.append(Order("STARFRUIT", price, -sell_volume))
-                                current_position -= sell_volume  # Update position tracker
-            
-            # PART 2: POSITION CLEARING AT MID PRICE (THRESHOLD = 0)
-            # If we're long, try to sell at mid price
-            if current_position > 0:
-                # Look for buy orders close to mid price
-                for price, volume in sorted(order_depth.buy_orders.items(), reverse=True):
-                    # Find orders close to mid price (can be slightly below or equal to)
-                    if price >= mid_price_int - 0.5 and price <= mid_price_int + 0.5:
-                        # Only sell up to the amount we are long by
-                        clear_volume = min(volume, current_position)
-                        if clear_volume > 0:
-                            orders.append(Order("STARFRUIT", price, -clear_volume))
-                            current_position -= clear_volume
-                            if current_position <= 0:
-                                break  # Stop if we've cleared our position
-            
-            # If we're short, try to buy at mid price
-            elif current_position < 0:
-                # Look for sell orders close to mid price
-                for price, volume in sorted(order_depth.sell_orders.items()):
-                    # Find orders close to mid price (can be slightly above or equal to)
-                    if price >= mid_price_int - 0.5 and price <= mid_price_int + 0.5:
-                        # Only buy up to the amount we are short by
-                        clear_volume = min(-volume, abs(current_position))
-                        if clear_volume > 0:
-                            orders.append(Order("STARFRUIT", price, clear_volume))
-                            current_position += clear_volume
-                            if current_position >= 0:
-                                break  # Stop if we've cleared our position
+                        if sell_volume > 0:
+                            orders.append(Order("STARFRUIT", price, -sell_volume))
+                            current_position -= sell_volume  # Update position tracker
+        
+        # PART 3: PLACE RESTING ORDERS AT MID PRICE ± 3
+        # Calculate resting order prices
+        wide_threshold = 3
+        rest_buy_price = int(mid_price - wide_threshold)  # Round down for buy
+        rest_sell_price = int(mid_price + wide_threshold)
+        if mid_price % 1 != 0:  # If mid price has decimal part, round up for sell
+            rest_sell_price += 1
+        
+        # Calculate maximum volumes we can trade without breaching position limits
+        max_buy_volume = position_limit - max(position, current_position)
+        max_sell_volume = position_limit + min(position, current_position)
+        
+        # Place resting buy order
+        if max_buy_volume > 0:
+            orders.append(Order("STARFRUIT", rest_buy_price, max_buy_volume))
+        
+        # Place resting sell order
+        if max_sell_volume > 0:
+            orders.append(Order("STARFRUIT", rest_sell_price, -max_sell_volume))
         
         result["STARFRUIT"] = orders
         
-        # Save current best prices for next iteration
-        new_trader_data = {
-            "best_bid": self.last_valid_best_bid,
-            "best_ask": self.last_valid_best_ask
-        }
-        
-        trader_data_str = self.serialize_trader_data(new_trader_data)
-        logger.flush(state, result, 0, trader_data_str)
-        return result, 0, trader_data_str
+        logger.flush(state, result, 0, "")
+        return result, 0, ""
 
 def Trader():
     """Factory function that returns a trader instance"""
-    return StarfruitTrader() 
+    return StarfruitTrader()
