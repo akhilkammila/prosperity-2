@@ -154,6 +154,7 @@ class StarfruitTrader:
         - Calculate mid price based on best bid/ask with volume > 15
         - Look at the orderbook to find favorable prices
         - Trade at those specific prices with corresponding volumes
+        - Try to clear position at mid price if possible
         """
         result = {}
         
@@ -189,10 +190,12 @@ class StarfruitTrader:
         if self.last_valid_best_bid is not None and self.last_valid_best_ask is not None:
             # Calculate mid price
             mid_price = (self.last_valid_best_bid + self.last_valid_best_ask) / 2
+            mid_price_int = int(mid_price + 0.5)  # Round to nearest integer
             
             # Keep track of position for limit checking
             current_position = position
             
+            # PART 1: MAIN TRADING STRATEGY
             # Process sell orders - if price < mid-1, we want to buy
             if len(order_depth.sell_orders) > 0:
                 # Sort sell orders by price in ascending order (best prices first)
@@ -227,6 +230,35 @@ class StarfruitTrader:
                             if sell_volume > 0:
                                 orders.append(Order("STARFRUIT", price, -sell_volume))
                                 current_position -= sell_volume  # Update position tracker
+            
+            # PART 2: POSITION CLEARING AT MID PRICE (THRESHOLD = 0)
+            # If we're long, try to sell at mid price
+            if current_position > 0:
+                # Look for buy orders close to mid price
+                for price, volume in sorted(order_depth.buy_orders.items(), reverse=True):
+                    # Find orders close to mid price (can be slightly below or equal to)
+                    if price >= mid_price_int - 0.5 and price <= mid_price_int + 0.5:
+                        # Only sell up to the amount we are long by
+                        clear_volume = min(volume, current_position)
+                        if clear_volume > 0:
+                            orders.append(Order("STARFRUIT", price, -clear_volume))
+                            current_position -= clear_volume
+                            if current_position <= 0:
+                                break  # Stop if we've cleared our position
+            
+            # If we're short, try to buy at mid price
+            elif current_position < 0:
+                # Look for sell orders close to mid price
+                for price, volume in sorted(order_depth.sell_orders.items()):
+                    # Find orders close to mid price (can be slightly above or equal to)
+                    if price >= mid_price_int - 0.5 and price <= mid_price_int + 0.5:
+                        # Only buy up to the amount we are short by
+                        clear_volume = min(-volume, abs(current_position))
+                        if clear_volume > 0:
+                            orders.append(Order("STARFRUIT", price, clear_volume))
+                            current_position += clear_volume
+                            if current_position >= 0:
+                                break  # Stop if we've cleared our position
         
         result["STARFRUIT"] = orders
         
