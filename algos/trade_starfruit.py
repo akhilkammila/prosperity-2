@@ -151,9 +151,9 @@ class StarfruitTrader:
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         """
         Trading strategy for STARFRUIT:
-        - Find best bid and ask with volume > 15
-        - Calculate mid price
-        - Place orders at mid ± 1
+        - Calculate mid price based on best bid/ask with volume > 15
+        - Look at the orderbook to find favorable prices
+        - Trade at those specific prices with corresponding volumes
         """
         result = {}
         
@@ -182,30 +182,51 @@ class StarfruitTrader:
         # Create orders list
         orders: list[Order] = []
         
+        # Position limit
+        position_limit = 20
+        
         # Only proceed if we have both a valid bid and ask
         if self.last_valid_best_bid is not None and self.last_valid_best_ask is not None:
             # Calculate mid price
             mid_price = (self.last_valid_best_bid + self.last_valid_best_ask) / 2
             
-            # Calculate buy and sell prices
-            threshold = 1
-            buy_price = int(mid_price - threshold)  # Round down
-            sell_price = int(mid_price + threshold) + (1 if mid_price % 1 != 0 else 0)  # Round up
+            # Keep track of position for limit checking
+            current_position = position
             
-            # Position limits
-            position_limit = 20  # Assuming same as AMETHYSTS
+            # Process sell orders - if price < mid-1, we want to buy
+            if len(order_depth.sell_orders) > 0:
+                # Sort sell orders by price in ascending order (best prices first)
+                for price, volume in sorted(order_depth.sell_orders.items()):
+                    # If price is below our threshold (mid - 1), we want to buy
+                    if price <= (mid_price - 1):
+                        # Check position limit for buying
+                        buy_limit = position_limit - current_position
+                        
+                        if buy_limit > 0:  # Only if we can buy
+                            # Buy either the available volume or our limit, whichever is smaller
+                            # Note: volume is negative in sell_orders, so we negate it
+                            buy_volume = min(-volume, buy_limit)
+                            
+                            if buy_volume > 0:
+                                orders.append(Order("STARFRUIT", price, buy_volume))
+                                current_position += buy_volume  # Update position tracker
             
-            # Calculate how much we can buy and sell
-            buy_limit = position_limit - position
-            sell_limit = position_limit + position
-            
-            # Place buy order (if we can buy)
-            if buy_limit > 0:
-                orders.append(Order("STARFRUIT", buy_price, buy_limit))
-                
-            # Place sell order (if we can sell)
-            if sell_limit > 0:
-                orders.append(Order("STARFRUIT", sell_price, -sell_limit))
+            # Process buy orders - if price > mid+1, we want to sell
+            if len(order_depth.buy_orders) > 0:
+                # Sort buy orders by price in descending order (best prices first)
+                for price, volume in sorted(order_depth.buy_orders.items(), reverse=True):
+                    # If price is above our threshold (mid + 1), we want to sell
+                    if price >= (mid_price + 1):
+                        # Check position limit for selling
+                        sell_limit = position_limit + current_position
+                        
+                        if sell_limit > 0:  # Only if we can sell
+                            # Sell either the available volume or our limit, whichever is smaller
+                            sell_volume = min(volume, sell_limit)
+                            
+                            if sell_volume > 0:
+                                orders.append(Order("STARFRUIT", price, -sell_volume))
+                                current_position -= sell_volume  # Update position tracker
         
         result["STARFRUIT"] = orders
         
