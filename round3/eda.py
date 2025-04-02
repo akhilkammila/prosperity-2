@@ -99,3 +99,6 @@ for symbol in prices['product'].unique():
     plt.show()
 
 # %%
+sns.kdeplot(prices[prices['product'] == 'ROSES']['mid_price'].diff().fillna(0))
+# add vertical red line at 0
+plt.axvline(0, color='red')
