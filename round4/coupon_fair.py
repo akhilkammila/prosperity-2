@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import os
 from data_loader import load_round_data
-from option_pricing import calculate_coupon_price, call_option_value
+from option_pricing import call_option_value
 
 # %%
 %load_ext autoreload

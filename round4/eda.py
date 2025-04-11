@@ -12,6 +12,21 @@ prices, trades = load_round_data(4)
 # prices = prices[prices['overall_time'] < 2e6]
 
 # %%
+# check volume of trades
+for volume in ['bid_volume_1', 'ask_volume_1', 'bid_volume_2', 'ask_volume_2']:
+    sns.histplot(prices[prices['product'] == 'COCONUT'][volume])
+    plt.title(volume)
+    plt.show()
+
+# %%
+# check spreads
+for symbol in prices['product'].unique():
+    spread = prices[prices['product'] == symbol]['ask_price_1'] - prices[prices['product'] == symbol]['bid_price_1']
+    sns.histplot(spread)
+    plt.title(symbol)
+    plt.show()
+
+# %%
 for symbol in prices['product'].unique():
     sns.lineplot(x='overall_time', y='mid_price', data=prices[prices['product'] == symbol])
     plt.title(symbol)
